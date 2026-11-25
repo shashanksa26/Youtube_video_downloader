@@ -49,6 +49,10 @@ def start_download(payload: DownloadRequest, background_tasks: BackgroundTasks):
         "status": "queued",
         "progress": None,
         "stage": "Queued",
+        "downloaded_mb": None,
+        "total_mb": None,
+        "speed_mb_s": None,
+        "cancel_requested": False,
         "file_path": None,
         "download_url": None,
         "error": None,
@@ -75,6 +79,43 @@ def check_status(task_id: str):
         status=task["status"],
         progress=task.get("progress"),
         stage=task.get("stage"),
+        downloaded_mb=task.get("downloaded_mb"),
+        total_mb=task.get("total_mb"),
+        speed_mb_s=task.get("speed_mb_s"),
+        download_url=task["download_url"],
+        error=task["error"],
+    )
+
+
+@app.post("/api/v1/cancel/{task_id}", response_model=TaskStatusResponse)
+def cancel_download(task_id: str):
+    """Request cancellation for a queued or active download task."""
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task = tasks[task_id]
+    if task["status"] in ("completed", "failed"):
+        raise HTTPException(
+            status_code=400,
+            detail="Task has already finished and cannot be cancelled",
+        )
+
+    task["cancel_requested"] = True
+    if task["status"] == "queued":
+        task["status"] = "cancelled"
+        task["stage"] = "Cancelled"
+        task["speed_mb_s"] = None
+    elif task["status"] == "downloading":
+        task["stage"] = "Cancelling…"
+
+    return TaskStatusResponse(
+        task_id=task_id,
+        status=task["status"],
+        progress=task.get("progress"),
+        stage=task.get("stage"),
+        downloaded_mb=task.get("downloaded_mb"),
+        total_mb=task.get("total_mb"),
+        speed_mb_s=task.get("speed_mb_s"),
         download_url=task["download_url"],
         error=task["error"],
     )

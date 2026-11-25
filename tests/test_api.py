@@ -204,4 +204,109 @@ def test_builtin_ui_and_static_assets_served():
 
     js_resp = client.get("/static/app.js")
     assert js_resp.status_code == 200
+    assert "progress-bar-text" in root_resp.text
+
+
+def test_progress_hooks_populate_speed_and_mb(tmp_path: Path):
+    expected_file = tmp_path / "t_prog.mp4"
+    expected_file.write_bytes(b"0" * (2 * 1024 * 1024))
+    snapshots = []
+
+    class FakeYdl:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def extract_info(self, url, download=True):
+            hook = self.opts["progress_hooks"][0]
+            hook(
+                {
+                    "status": "downloading",
+                    "downloaded_bytes": 5 * 1024 * 1024,
+                    "total_bytes": 10 * 1024 * 1024,
+                    "speed": 2.5 * 1024 * 1024,
+                    "info_dict": {"vcodec": "avc1", "acodec": "none"},
+                }
+            )
+            snapshots.append(dict(store["t_prog"]))
+            return {"title": "v", "requested_downloads": [{"filepath": str(expected_file)}]}
+
+    store = {"t_prog": {"status": "queued"}}
+    with patch("app.services.yt_dlp.YoutubeDL", side_effect=FakeYdl):
+        services.download_and_merge("https://youtu.be/abc", "1080p", "t_prog", store)
+
+    assert snapshots[0]["progress"] == 50.0
+    assert snapshots[0]["downloaded_mb"] == 5.0
+    assert snapshots[0]["total_mb"] == 10.0
+    assert snapshots[0]["speed_mb_s"] == 2.5
+    assert store["t_prog"]["status"] == "completed"
+    assert store["t_prog"]["total_mb"] == 2.0
+    assert store["t_prog"]["speed_mb_s"] is None
+
+
+def test_cancel_endpoint_and_hook_cleanup(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(services, "DOWNLOAD_DIR", tmp_path)
+    part_file = tmp_path / "t_cancel_video.mp4.part"
+    part_file.write_bytes(b"partial")
+
+    main.tasks["queued-id"] = {
+        "status": "queued",
+        "progress": None,
+        "stage": "Queued",
+        "downloaded_mb": None,
+        "total_mb": None,
+        "speed_mb_s": None,
+        "cancel_requested": False,
+        "file_path": None,
+        "download_url": None,
+        "error": None,
+    }
+    cancel_resp = client.post("/api/v1/cancel/queued-id")
+    assert cancel_resp.status_code == 200
+    assert cancel_resp.json()["status"] == "cancelled"
+    assert cancel_resp.json()["stage"] == "Cancelled"
+
+    assert client.post("/api/v1/cancel/missing-id").status_code == 404
+
+    main.tasks["done-id"] = {
+        "status": "completed",
+        "progress": 100.0,
+        "stage": "Ready to download",
+        "downloaded_mb": 1.0,
+        "total_mb": 1.0,
+        "speed_mb_s": None,
+        "cancel_requested": False,
+        "file_path": None,
+        "download_url": "/api/v1/file/done-id",
+        "error": None,
+    }
+    assert client.post("/api/v1/cancel/done-id").status_code == 400
+
+    class CancellingYdl:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def extract_info(self, url, download=True):
+            store["t_cancel"]["cancel_requested"] = True
+            self.opts["progress_hooks"][0]({"status": "downloading"})
+            return {}
+
+    store = {"t_cancel": {"status": "queued", "cancel_requested": False}}
+    with patch("app.services.yt_dlp.YoutubeDL", side_effect=CancellingYdl):
+        services.download_and_merge("https://youtu.be/abc", "1080p", "t_cancel", store)
+
+    assert store["t_cancel"]["status"] == "cancelled"
+    assert store["t_cancel"]["stage"] == "Cancelled"
+    assert not part_file.exists()
 

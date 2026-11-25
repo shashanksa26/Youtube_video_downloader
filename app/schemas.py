@@ -45,8 +45,11 @@ class TaskStatusResponse(BaseModel):
     """Status payload for an asynchronous download task."""
 
     task_id: str
-    status: str  # "queued", "downloading", "completed", "failed"
+    status: str  # "queued", "downloading", "completed", "failed", "cancelled"
     progress: Optional[float] = None
     stage: Optional[str] = None
+    downloaded_mb: Optional[float] = None
+    total_mb: Optional[float] = None
+    speed_mb_s: Optional[float] = None
     download_url: Optional[str] = None
     error: Optional[str] = None

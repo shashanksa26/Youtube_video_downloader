@@ -17,10 +17,13 @@
   const progressLabel = document.getElementById("progress-label");
   const progressPct = document.getElementById("progress-pct");
   const progressBar = document.getElementById("download-progress");
+  const progressBarText = document.getElementById("progress-bar-text");
   const downloadStatus = document.getElementById("download-status");
+  const cancelBtn = document.getElementById("cancel-btn");
   const fileDownloadLink = document.getElementById("file-download-link");
 
   let activeUrl = "";
+  let activeTaskId = null;
   let pollTimer = null;
 
   // Accessible error announcement & aria-invalid synchronization
@@ -189,9 +192,40 @@
     progressBar.removeAttribute("max");
     progressLabel.textContent = "Queued…";
     progressPct.textContent = "";
+    progressBarText.textContent = "Queued…";
     fileDownloadLink.hidden = true;
     fileDownloadLink.setAttribute("href", "#");
     setStatus(downloadStatus, "Waiting for worker to start…");
+  };
+
+  const formatSpeed = (speedMbS) => {
+    if (typeof speedMbS !== "number" || Number.isNaN(speedMbS) || speedMbS <= 0) return null;
+    if (speedMbS < 1) {
+      return `${Math.round(speedMbS * 1024)} KB/s`;
+    }
+    return `${speedMbS.toFixed(2)} MB/s`;
+  };
+
+  const formatBarTelemetry = (data) => {
+    const parts = [];
+    if (typeof data.progress === "number") {
+      parts.push(`${data.progress.toFixed(1)}%`);
+    }
+    if (typeof data.downloaded_mb === "number" && typeof data.total_mb === "number") {
+      parts.push(`${data.downloaded_mb.toFixed(2)} / ${data.total_mb.toFixed(2)} MB`);
+    } else if (typeof data.downloaded_mb === "number") {
+      parts.push(`${data.downloaded_mb.toFixed(2)} MB`);
+    } else if (typeof data.total_mb === "number") {
+      parts.push(`Total: ${data.total_mb.toFixed(2)} MB`);
+    }
+    const speedText = formatSpeed(data.speed_mb_s);
+    if (speedText) {
+      parts.push(speedText);
+    }
+    if (parts.length === 0) {
+      return data.stage || data.status || "Working…";
+    }
+    return parts.join(" · ");
   };
 
   const pollStatus = async (taskId) => {
@@ -216,10 +250,16 @@
         progressPct.textContent = "";
       }
 
+      progressBarText.textContent = formatBarTelemetry(data);
+
       if (data.status === "completed") {
+        activeTaskId = null;
         progressBar.max = 100;
         progressBar.value = 100;
         progressPct.textContent = "100%";
+        const sizeNote = typeof data.total_mb === "number" ? ` · ${data.total_mb.toFixed(2)} MB` : "";
+        progressBarText.textContent = `100%${sizeNote} · Complete`;
+        cancelBtn.hidden = true;
         fileDownloadLink.href = data.download_url;
         fileDownloadLink.hidden = false;
         setStatus(downloadStatus, "Merge complete. Click Save MP4 File to download.", "is-success");
@@ -228,10 +268,26 @@
         return;
       }
 
-      if (data.status === "failed") {
+      if (data.status === "cancelled") {
+        activeTaskId = null;
         progressBar.max = 100;
         progressBar.value = 0;
         progressPct.textContent = "";
+        progressBarText.textContent = "Cancelled";
+        cancelBtn.hidden = true;
+        setStatus(downloadStatus, "Download cancelled.");
+        downloadBtn.disabled = false;
+        downloadBtn.textContent = "Download MP4";
+        return;
+      }
+
+      if (data.status === "failed") {
+        activeTaskId = null;
+        progressBar.max = 100;
+        progressBar.value = 0;
+        progressPct.textContent = "";
+        progressBarText.textContent = "Failed";
+        cancelBtn.hidden = true;
         setStatus(downloadStatus, data.error || "Download failed.", "is-error");
         downloadBtn.disabled = false;
         downloadBtn.textContent = "Download MP4";
@@ -241,6 +297,8 @@
       setStatus(downloadStatus, `${stageText}…`);
       pollTimer = setTimeout(() => pollStatus(taskId), 800);
     } catch (err) {
+      activeTaskId = null;
+      cancelBtn.hidden = true;
       setStatus(downloadStatus, err.message, "is-error");
       downloadBtn.disabled = false;
       downloadBtn.textContent = "Download MP4";
@@ -294,6 +352,9 @@
     downloadBtn.textContent = "Processing…";
     progressSection.hidden = false;
     resetProgress();
+    cancelBtn.hidden = false;
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = "Cancel Download";
     progressHeading.focus();
 
     try {
@@ -309,11 +370,50 @@
       }
 
       const data = await res.json();
+      activeTaskId = data.task_id;
       pollStatus(data.task_id);
     } catch (err) {
+      activeTaskId = null;
+      cancelBtn.hidden = true;
       setStatus(downloadStatus, err.message, "is-error");
       downloadBtn.disabled = false;
       downloadBtn.textContent = "Download MP4";
+    }
+  });
+
+  cancelBtn.addEventListener("click", async () => {
+    if (!activeTaskId) return;
+    const targetTaskId = activeTaskId;
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = "Cancelling…";
+    setStatus(downloadStatus, "Cancelling download…");
+
+    try {
+      const res = await fetch(`/api/v1/cancel/${encodeURIComponent(targetTaskId)}`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Failed to cancel download (${res.status})`);
+      }
+      const data = await res.json();
+      if (data.status === "cancelled") {
+        stopPolling();
+        activeTaskId = null;
+        progressBar.max = 100;
+        progressBar.value = 0;
+        progressPct.textContent = "";
+        progressLabel.textContent = "Cancelled";
+        progressBarText.textContent = "Cancelled";
+        cancelBtn.hidden = true;
+        setStatus(downloadStatus, "Download cancelled.");
+        downloadBtn.disabled = false;
+        downloadBtn.textContent = "Download MP4";
+      }
+    } catch (err) {
+      setStatus(downloadStatus, err.message, "is-error");
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = "Cancel Download";
     }
   });
 })();

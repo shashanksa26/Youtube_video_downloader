@@ -77,10 +77,14 @@
           <label id="progress-label" for="download-progress">Queued…</label>
           <span id="progress-pct" class="progress-pct"></span>
         </div>
-        <progress id="download-progress"></progress>
+        <div class="progress-bar-box">
+          <progress id="download-progress"></progress>
+          <span id="progress-bar-text" class="progress-bar-text">Queued…</span>
+        </div>
       </div>
       <p id="download-status" class="status-note" role="status" aria-live="polite"></p>
       <div class="actions-row">
+        <button type="button" id="cancel-btn" class="btn-secondary" hidden>Cancel Download</button>
         <a id="file-download-link" class="btn-download" href="#" download hidden>Save MP4 File</a>
       </div>
     </section>

@@ -8,6 +8,10 @@ DOWNLOAD_DIR = Path(__file__).resolve().parent.parent / "downloads"
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
+class DownloadCancelledError(Exception):
+    """Raised when a download task is cancelled by the user."""
+
+
 def get_video_formats(url: str) -> Dict[str, Any]:
     """Extract video metadata and deduplicated resolution options without downloading."""
     ydl_opts = {
@@ -71,6 +75,16 @@ def _resolve_output_path(ydl: yt_dlp.YoutubeDL, info: Dict[str, Any]) -> str:
     return mp4_path
 
 
+def _cleanup_task_files(task_id: str) -> None:
+    """Remove any partial or temporary files created for a cancelled task."""
+    for path in DOWNLOAD_DIR.glob(f"{task_id}_*"):
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            pass
+
+
 def download_and_merge(
     url: str,
     resolution: str,
@@ -79,9 +93,18 @@ def download_and_merge(
 ) -> None:
     """Download requested video resolution + best audio and mux into MP4 via FFmpeg."""
     try:
+        if task_store[task_id].get("cancel_requested"):
+            task_store[task_id]["status"] = "cancelled"
+            task_store[task_id]["stage"] = "Cancelled"
+            task_store[task_id]["speed_mb_s"] = None
+            return
+
         task_store[task_id]["status"] = "downloading"
         task_store[task_id]["stage"] = "Starting download"
         task_store[task_id]["progress"] = None
+        task_store[task_id]["downloaded_mb"] = None
+        task_store[task_id]["total_mb"] = None
+        task_store[task_id]["speed_mb_s"] = None
         DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
         output_template = str(DOWNLOAD_DIR / f"{task_id}_%(title)s.%(ext)s")
 
@@ -93,10 +116,14 @@ def download_and_merge(
             format_str = "bestvideo+bestaudio/best"
 
         def on_progress(data: Dict[str, Any]) -> None:
+            if task_store[task_id].get("cancel_requested"):
+                raise DownloadCancelledError("Download cancelled by user")
+
             status = data.get("status")
             if status == "downloading":
                 total = data.get("total_bytes") or data.get("total_bytes_estimate")
                 downloaded = data.get("downloaded_bytes")
+                speed = data.get("speed")
                 info_dict = data.get("info_dict") or {}
                 vcodec = info_dict.get("vcodec")
                 acodec = info_dict.get("acodec")
@@ -107,17 +134,36 @@ def download_and_merge(
                 else:
                     task_store[task_id]["stage"] = "Downloading media"
 
+                if downloaded is not None:
+                    task_store[task_id]["downloaded_mb"] = round(
+                        downloaded / (1024 * 1024), 2
+                    )
+                if total:
+                    task_store[task_id]["total_mb"] = round(total / (1024 * 1024), 2)
+                if speed is not None:
+                    task_store[task_id]["speed_mb_s"] = round(
+                        speed / (1024 * 1024), 3
+                    )
                 if total and downloaded is not None:
                     pct = round(min(99.0, (downloaded / total) * 100), 1)
                     task_store[task_id]["progress"] = pct
             elif status == "finished":
+                total = data.get("total_bytes") or data.get("downloaded_bytes")
+                if total:
+                    mb = round(total / (1024 * 1024), 2)
+                    task_store[task_id]["downloaded_mb"] = mb
+                    task_store[task_id]["total_mb"] = mb
+                task_store[task_id]["speed_mb_s"] = None
                 task_store[task_id]["progress"] = 100.0
                 task_store[task_id]["stage"] = "Processing downloaded stream"
 
         def on_postprocess(data: Dict[str, Any]) -> None:
+            if task_store[task_id].get("cancel_requested"):
+                raise DownloadCancelledError("Download cancelled by user")
             if data.get("status") in ("started", "processing"):
                 task_store[task_id]["stage"] = "Merging video & audio with FFmpeg"
                 task_store[task_id]["progress"] = None
+                task_store[task_id]["speed_mb_s"] = None
 
         ydl_opts = {
             "format": format_str,
@@ -131,15 +177,38 @@ def download_and_merge(
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
+            if task_store[task_id].get("cancel_requested"):
+                raise DownloadCancelledError("Download cancelled by user")
             final_path = _resolve_output_path(ydl, info)
+
+        if os.path.exists(final_path):
+            final_mb = round(os.path.getsize(final_path) / (1024 * 1024), 2)
+            task_store[task_id]["downloaded_mb"] = final_mb
+            task_store[task_id]["total_mb"] = final_mb
 
         task_store[task_id]["file_path"] = final_path
         task_store[task_id]["download_url"] = f"/api/v1/file/{task_id}"
         task_store[task_id]["progress"] = 100.0
+        task_store[task_id]["speed_mb_s"] = None
         task_store[task_id]["stage"] = "Ready to download"
         task_store[task_id]["status"] = "completed"
 
+    except DownloadCancelledError:
+        task_store[task_id]["error"] = None
+        task_store[task_id]["speed_mb_s"] = None
+        task_store[task_id]["stage"] = "Cancelled"
+        task_store[task_id]["status"] = "cancelled"
+        _cleanup_task_files(task_id)
+
     except Exception as exc:
+        if task_store[task_id].get("cancel_requested"):
+            task_store[task_id]["error"] = None
+            task_store[task_id]["speed_mb_s"] = None
+            task_store[task_id]["stage"] = "Cancelled"
+            task_store[task_id]["status"] = "cancelled"
+            _cleanup_task_files(task_id)
+            return
         task_store[task_id]["error"] = str(exc)
+        task_store[task_id]["speed_mb_s"] = None
         task_store[task_id]["stage"] = "Failed"
         task_store[task_id]["status"] = "failed"
