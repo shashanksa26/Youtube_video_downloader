@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>YouTube Media Downloader</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main class="container">
+    <header class="page-header">
+      <h1>YouTube Video Downloader</h1>
+      <p class="subtitle">Inspect available qualities, merge video with the best audio track, and save an MP4 file.</p>
+    </header>
+
+    <section class="card" aria-labelledby="inspect-heading">
+      <h2 id="inspect-heading" class="section-title">1. Paste Video Link</h2>
+      <form id="inspect-form" aria-labelledby="inspect-heading" novalidate>
+        <div class="field">
+          <label for="youtube-url">YouTube URL <span aria-hidden="true">*</span></label>
+          <span id="url-hint" class="hint">Supports youtube.com and youtu.be links</span>
+          <div class="input-row">
+            <input
+              id="youtube-url"
+              name="url"
+              type="url"
+              required
+              pattern="https?://.+"
+              placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+              autocomplete="url"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+              enterkeyhint="go"
+              aria-describedby="url-hint"
+              data-error="url-error"
+            >
+            <button type="submit" id="inspect-btn" class="btn-primary">Fetch Qualities</button>
+          </div>
+          <div id="url-error" class="error-msg">
+            <span role="img" aria-label="Error">⚠</span> Enter a valid URL starting with https:// or http://.
+          </div>
+        </div>
+      </form>
+      <p id="inspect-status" class="status-note" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="video-section" class="card" aria-labelledby="video-title" hidden>
+      <div class="video-preview">
+        <div class="thumb-frame">
+          <img id="video-thumb" src="" alt="" decoding="async" hidden>
+        </div>
+        <div class="video-meta">
+          <h2 id="video-title" class="video-title" tabindex="-1"></h2>
+          <p id="video-duration" class="meta-text"></p>
+        </div>
+      </div>
+
+      <form id="download-form" aria-labelledby="video-title">
+        <fieldset class="quality-fieldset">
+          <legend>2. Select Quality (merged with best audio as MP4)</legend>
+          <div id="quality-options" class="quality-grid"></div>
+        </fieldset>
+
+        <div class="actions-row">
+          <button type="submit" id="download-btn" class="btn-primary">Download MP4</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="progress-section" class="card" aria-labelledby="progress-heading" hidden>
+      <h2 id="progress-heading" class="section-title" tabindex="-1">3. Download Progress</h2>
+      <div class="progress-wrapper">
+        <div class="progress-header">
+          <label id="progress-label" for="download-progress">Queued…</label>
+          <span id="progress-pct" class="progress-pct"></span>
+        </div>
+        <progress id="download-progress"></progress>
+      </div>
+      <p id="download-status" class="status-note" role="status" aria-live="polite"></p>
+      <div class="actions-row">
+        <a id="file-download-link" class="btn-download" href="#" download hidden>Save MP4 File</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
